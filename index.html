@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>Interactive 3D Model Painting</title>
+<style>
+body {
+margin: 0;
+overflow: hidden;
+}
+canvas {
+width: 100%;
+height: 100%;
+}
+.text-box {
+position: absolute;
+font-size: 20px;
+background-color: rgba(255, 255, 255, 0.8);
+padding: 5px;
+pointer-events: none;
+}
+</style>
+</head>
+<body>
+<button id="doneButton">Done</button>
+<button id="replayButton">Replay</button>
+<div id="textBoxContainer"></div>
+<script src="https://cdn.jsdelivr.net/npm/three@0.138.3/build/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.138.3/examples/js/loaders/GLTFLoader.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.138.3/examples/js/controls/OrbitControls.js"></script>
+<script>
+// Set up the scene, camera, and renderer
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+const renderer = new THREE.WebGLRenderer();
+renderer.setSize(window.innerWidth, window.innerHeight);
+document.body.appendChild(renderer.domElement);
+
+// Add basic lighting to the scene
+const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
+scene.add(ambientLight);
+const pointLight = new THREE.PointLight(0xffffff, 1);
+pointLight.position.set(5, 5, 5);
+scene.add(pointLight);
+
+// Set up the orbit controls
+const controls = new THREE.OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.dampingFactor = 0.05;
+controls.screenSpacePanning = false;
+controls.minDistance = 1;
+controls.maxDistance = 100;
+
+// Load the GLTF model
+const loader = new THREE.GLTFLoader();
+let model;
+loader.load('scene.gltf', function (gltf) {
+model = gltf.scene;
+scene.add(model);
+
+// Adjust the camera position based on the model's bounding box
+const box = new THREE.Box3().setFromObject(model);
+const center = box.getCenter(new THREE.Vector3());
+const size = box.getSize(new THREE.Vector3());
+const maxDim = Math.max(size.x, size.y, size.z);
+camera.position.copy(center);
+camera.position.z += maxDim * 1.5;
+
+// Update the orbit controls target
+controls.target.copy(center);
+controls.update();
+}, undefined, function (error) {
+console.error('Error loading GLTF model:', error);
+});
+
+// Set up painting functionality
+const raycaster = new THREE.Raycaster();
+const mouse = new THREE.Vector2();
+const paintData = [];
+const textData = [];
+
+function onMouseClick(event) {
+mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
+mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+raycaster.setFromCamera(mouse, camera);
+const intersects = raycaster.intersectObject(model, true);
+if (intersects.length > 0) {
+const paintPoint = intersects[0].point;
+paintData.push(paintPoint);
+const paintMaterial = new THREE.MeshBasicMaterial({ color: 0xff0000 });
+const paintGeometry = new THREE.SphereGeometry(0.05);
+const paintMesh = new THREE.Mesh(paintGeometry, paintMaterial);
+paintMesh.position.copy(paintPoint);
+paintMesh.userData.isPaint = true; // Add a flag to identify paint meshes
+scene.add(paintMesh);
+}
+}
+
+// Set up text functionality
+function onKeyPress(event) {
+if (event.key === 'Enter') {
+const text = prompt('Enter text:');
+if (text) {
+mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
+mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+raycaster.setFromCamera(mouse, camera);
+const intersects = raycaster.intersectObject(model, true);
+if (intersects.length > 0) {
+const textPoint = intersects[0].point;
+textData.push({ text, position: textPoint });
+const textDiv = document.createElement('div');
+textDiv.textContent = text;
+textDiv.classList.add('text-box');
+document.getElementById('textBoxContainer').appendChild(textDiv);
+updateTextBoxPosition(textDiv, textPoint);
+}
+}
+}
+}
+
+// Update the position of the text box based on the 3D position
+function updateTextBoxPosition(textBox, position) {
+const textPosition = position.clone().project(camera);
+const x = (textPosition.x + 1) * window.innerWidth / 2;
+const y = -(textPosition.y - 1) * window.innerHeight / 2;
+textBox.style.left = `${x}px`;
+textBox.style.top = `${y}px`;
+}
+
+// Save painting and text data when "done" button is clicked
+function onDoneClick() {
+localStorage.setItem('paintData', JSON.stringify(paintData));
+localStorage.setItem('textData', JSON.stringify(textData));
+console.log('Painting and text data saved:', paintData, textData);
+// Remove all paint and text from the scene
+const objectsToRemove = [];
+scene.traverse((object) => {
+if (object.userData.isPaint || object.userData.isText) {
+objectsToRemove.push(object);
+}
+});
+objectsToRemove.forEach((object) => {
+object.removeFromParent();
+object.material.dispose();
+object.geometry.dispose();
+});
+// Remove all text boxes from the DOM
+document.getElementById('textBoxContainer').innerHTML = '';
+}
+
+// Replay saved painting and text data as an animation
+function onReplayClick() {
+const savedPaintData = JSON.parse(localStorage.getItem('paintData'));
+const savedTextData = JSON.parse(localStorage.getItem('textData'));
+let replayIndex = 0;
+const replayInterval = setInterval(() => {
+// Clear the scene and text box container
+scene.traverse((object) => {
+if (object.userData.isPaint || object.userData.isText) {
+object.removeFromParent();
+object.material.dispose();
+object.geometry.dispose();
+}
+});
+document.getElementById('textBoxContainer').innerHTML = '';
+
+if (replayIndex < savedPaintData.length) {
+const paintPoint = savedPaintData[replayIndex];
+const paintMaterial = new THREE.MeshBasicMaterial({ color: 0xff0000 });
+const paintGeometry = new THREE.SphereGeometry(0.05);
+const paintMesh = new THREE.Mesh(paintGeometry, paintMaterial);
+paintMesh.position.copy(paintPoint);
+scene.add(paintMesh);
+} else if (replayIndex < savedPaintData.length + savedTextData.length) {
+const textIndex = replayIndex - savedPaintData.length;
+const textData = savedTextData[textIndex];
+const textDiv = document.createElement('div');
+textDiv.textContent = textData.text;
+textDiv.classList.add('text-box');
+document.getElementById('textBoxContainer').appendChild(textDiv);
+updateTextBoxPosition(textDiv, textData.position);
+} else {
+clearInterval(replayInterval);
+}
+replayIndex++;
+}, 1000);
+}
+
+// Event listeners
+window.addEventListener('click', onMouseClick, false);
+window.addEventListener('keypress', onKeyPress, false);
+document.getElementById('doneButton').addEventListener('click', onDoneClick, false);
+document.getElementById('replayButton').addEventListener('click', onReplayClick, false);
+
+// Handle window resize
+function onWindowResize() {
+camera.aspect = window.innerWidth / window.innerHeight;
+camera.updateProjectionMatrix();
+renderer.setSize(window.innerWidth, window.innerHeight);
+// Update the position of all text boxes
+const textBoxes = document.getElementsByClassName('text-box');
+for (let i = 0; i < textBoxes.length; i++) {
+const textBox = textBoxes[i];
+const position = textData[i].position;
+updateTextBoxPosition(textBox, position);
+}
+}
+window.addEventListener('resize', onWindowResize, false);
+
+// Render loop
+function animate() {
+requestAnimationFrame(animate);
+controls.update();
+renderer.render(scene, camera);
+}
+animate();
+</script>
+</body>
+</html>
